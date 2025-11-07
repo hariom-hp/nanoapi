@@ -6,9 +6,27 @@ import yt_dlp
 import subprocess
 import re
 import os
+import random
 from typing import Any
 
 app = FastAPI(title="Video Downloader API")
+
+# Rotating proxy list (use free proxies or premium service)
+PROXY_LIST = [
+    # Add your proxy list here - format: "http://user:pass@host:port"
+    # Example: "http://proxy1.example.com:8080"
+    # For production, use services like:
+    # - Bright Data (https://brightdata.com) - $500/month residential
+    # - Smartproxy (https://smartproxy.com) - $75/month
+    # - ProxyMesh (https://proxymesh.com) - $9.95/month
+    # Leave empty to use direct connection (will get blocked)
+]
+
+def get_random_proxy():
+    """Get a random proxy from the list"""
+    if PROXY_LIST:
+        return random.choice(PROXY_LIST)
+    return None
 
 # Add CORS middleware for Flutter
 app.add_middleware(
@@ -47,26 +65,34 @@ async def download_video(video: VideoURL):
     if not video.url.startswith(('http://', 'https://')):
         raise HTTPException(status_code=400, detail="Invalid URL format")
     
+    # Get random proxy
+    proxy = get_random_proxy()
+    
     ydl_opts: dict[str, Any] = {
-        'format': 'best[protocol^=http][ext=mp4]/best[protocol^=http]/best',  # Prioritize HTTP MP4
+        'format': 'best[protocol^=http][ext=mp4]/best[protocol^=http]/best',
         'nocheckcertificate': True,
         'quiet': True,
         'no_warnings': True,
-        'http_chunk_size': 10485760,  # 10MB chunks
-        'concurrent_fragment_downloads': 8,  # Increase to 8 parallel downloads
-        'buffersize': 32768,  # 32KB buffer (doubled)
+        'http_chunk_size': 10485760,
+        'concurrent_fragment_downloads': 8,
+        'buffersize': 32768,
         'retries': 10,
         'fragment_retries': 10,
         'socket_timeout': 30,
-        'source_address': '0.0.0.0',  # Use all network interfaces
-        'throttledratelimit': None,  # Remove rate limiting
         'extractor_args': {
             'youtube': {
-                'player_client': ['android_creator'],  # Use Android creator client
-                'skip': ['hls', 'dash'],  # Skip HLS/DASH formats
+                'player_client': ['android_creator'],
+                'skip': ['hls', 'dash'],
             }
         },
     }
+    
+    # Add proxy if available
+    if proxy:
+        ydl_opts['proxy'] = proxy
+        print(f"🔐 Using proxy: {proxy.split('@')[1] if '@' in proxy else proxy}")
+    else:
+        print("⚠️ No proxy configured - may get blocked by platforms")
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl: # type: ignore
@@ -76,21 +102,29 @@ async def download_video(video: VideoURL):
         
         print(f"🎬 Downloading: {title}")
         
-        # Stream video using subprocess with maximum performance settings
+        # Build yt-dlp command with proxy
+        cmd = [
+            'yt-dlp',
+            '-f', 'best[protocol^=http][ext=mp4]/best[protocol^=http]/best',
+            '--no-check-certificate',
+            '--concurrent-fragments', '8',
+            '--buffer-size', '32K',
+            '--http-chunk-size', '10M',
+            '--socket-timeout', '30',
+            '--no-part',
+            '--extractor-args', 'youtube:player_client=android_creator',
+        ]
+        
+        # Add proxy to command if available
+        if proxy:
+            cmd.extend(['--proxy', proxy])
+        
+        cmd.extend(['-o', '-', video.url])
+        
+        # Stream video using subprocess
         def generate():
-            process = subprocess.Popen([
-                'yt-dlp',
-                '-f', 'best[protocol^=http][ext=mp4]/best[protocol^=http]/best',
-                '--no-check-certificate',
-                '--concurrent-fragments', '8',
-                '--buffer-size', '32K',
-                '--http-chunk-size', '10M',
-                '--socket-timeout', '30',
-                '--no-part',
-                '--extractor-args', 'youtube:player_client=android_creator',
-                '-o', '-',
-                video.url
-            ],
+            process = subprocess.Popen(
+                cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 bufsize=2097152
@@ -100,7 +134,7 @@ async def download_video(video: VideoURL):
                 process.wait()
                 return
             while True:
-                chunk = stdout.read(131072)  # 128KB chunks (doubled again)
+                chunk = stdout.read(131072)
                 if not chunk:
                     break
                 yield chunk
