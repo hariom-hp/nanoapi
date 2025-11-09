@@ -68,11 +68,24 @@ async def download_video(video: VideoURL):
     # Get random proxy
     proxy = get_random_proxy()
     
+    # Setup cookies - either from file or environment variable
+    cookie_file = None
+    if os.path.exists('cookies.txt'):
+        cookie_file = 'cookies.txt'
+        print("🍪 Using cookies from cookies.txt")
+    elif os.getenv('COOKIES_CONTENT'):
+        # Write cookies from environment variable to temp file
+        cookie_file = '/tmp/cookies.txt'
+        with open(cookie_file, 'w') as f:
+            f.write(os.getenv('COOKIES_CONTENT', ''))
+        print("🍪 Using cookies from environment variable")
+    
     ydl_opts: dict[str, Any] = {
         'format': 'best[protocol^=http][ext=mp4]/best[protocol^=http]/best',
         'nocheckcertificate': True,
         'quiet': True,
         'no_warnings': True,
+        'cookiefile': cookie_file,  # ✅ Use cookies for authentication
         'http_chunk_size': 10485760,
         'concurrent_fragment_downloads': 8,
         'buffersize': 32768,
@@ -102,7 +115,7 @@ async def download_video(video: VideoURL):
         
         print(f"🎬 Downloading: {title}")
         
-        # Build yt-dlp command with proxy
+        # Build yt-dlp command with proxy and cookies
         cmd = [
             'yt-dlp',
             '-f', 'best[protocol^=http][ext=mp4]/best[protocol^=http]/best',
@@ -114,6 +127,10 @@ async def download_video(video: VideoURL):
             '--no-part',
             '--extractor-args', 'youtube:player_client=android_creator',
         ]
+        
+        # Add cookies if available
+        if cookie_file:
+            cmd.extend(['--cookies', cookie_file])
         
         # Add proxy to command if available
         if proxy:
